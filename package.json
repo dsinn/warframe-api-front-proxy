@@ -1,0 +1,23 @@
+{
+  "name": "warframe-api-front-proxy",
+  "version": "1.0.0",
+  "description": "A Cloudflare Worker that acts as a CORS-enabled proxy for Warframe API endpoints, for use by [browse.wf](https://github.com/dsinn/browse.wf).",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "lint": "eslint index.js test/index.spec.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.18",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.0.2",
+    "globals": "^17.4.0",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.69.0"
+  },
+  "type": "module"
+}

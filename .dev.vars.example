@@ -1,0 +1,4 @@
+ALLOWED_HOST=your-github-username.github.io
+WARFRAME_API_FRONT_PROXY_TOKEN=
+PRIVATE_PROXY_URL=https://example.com/proxy.php
+PRIVATE_PROXY_SECRET=

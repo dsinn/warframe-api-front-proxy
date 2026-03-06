@@ -1,0 +1,11 @@
+name = "warframe-api-front-proxy"
+main = "index.js"
+compatibility_date = "2026-02-26"
+
+[observability]
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
