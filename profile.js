@@ -1,6 +1,6 @@
 import { respond, fetchUpstream } from "./utils.js";
 
-const VALID_PLATFORM = /^(?:pc|ps4|xb1|swi|mob)$/;
+const VALID_PLATFORM = /^(?:pc|ps4|xb1|swi|mob|and)$/;
 const VALID_PLAYER_ID_REGEX = /^[0-9a-f]{24}$/; // Keep in sync with validateAccountId() in browse.wf/profile.ts
 
 export const extraAllowHeaders = ["Authorization"];

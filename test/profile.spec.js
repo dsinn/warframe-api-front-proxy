@@ -227,7 +227,7 @@ describe("GET /profile", () => {
     });
 
     it("supports all valid platforms", async () => {
-      for (const platform of ["pc", "ps4", "xb1", "swi", "mob"]) {
+      for (const platform of ["pc", "ps4", "xb1", "swi", "mob", "and"]) {
         interceptAuth(200, { id: VALID_USER_ID });
         interceptRpcAllowed(FUTURE_TIMESTAMP);
         const platformSuffix = platform === "pc" ? "" : `-${platform}`;
