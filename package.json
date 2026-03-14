@@ -6,7 +6,7 @@
   "scripts": {
     "test": "vitest --run",
     "test:watch": "vitest",
-    "lint": "eslint index.js test/index.spec.js"
+    "lint": "eslint ."
   },
   "keywords": [],
   "author": "",

@@ -30,6 +30,26 @@ An example implementation is available at [warframe-api-private-proxy-php](https
 | `/worldState` | — | `https://api.warframe.com/cdn/worldState.php` |
 | `/profile` | `platform`, `playerId` | `http://content[-platform].warframe.com/dynamic/getProfileViewingData.php` |
 
+### `/profile` request flow
+
+```mermaid
+flowchart TD
+    A[GET /profile] --> B{Origin allowed?<br/>Token valid?<br/>Params valid?}
+    B -->|No| C[403 / 422]
+    B -->|Yes| D{DATABASE_URL<br/>configured?}
+    D -->|No| E[401 Unauthorized]
+    D -->|Yes| F{Authorization:<br/>Bearer present?}
+    F -->|No| E
+    F -->|Yes| G{Supabase<br/>JWT valid?}
+    G -->|No / error| H[401 / 500]
+    G -->|Yes| J{try_profile_request<br/>RPC}
+    J -->|allowed: false| K["429 Too Many Requests<br/>Retry-After: &lt;HTTP date&gt;"]
+    J -->|RPC error| L[500 Internal Server Error]
+    J -->|allowed: true| I[Fetch from<br/>private proxy]
+    I -->|Network error| M[502 Bad Gateway]
+    I -->|Response| P["upstream status<br/>{ nextFetchAvailableAt, profile: &lt;body&gt; }"]
+```
+
 ## Environment Variables
 
 | Variable | Description |
@@ -38,12 +58,19 @@ An example implementation is available at [warframe-api-private-proxy-php](https
 | `WARFRAME_API_FRONT_PROXY_TOKEN` | Shared secret token; must match the value sent by browse.wf clients via `X-Warframe-API-Front-Proxy-Token` header |
 | `PRIVATE_PROXY_URL` | Full URL to the private proxy script (e.g. `https://example.com/proxy.php`) |
 | `PRIVATE_PROXY_SECRET` | *(Optional)* Shared secret sent to the private proxy via `X-Private-Proxy-Secret` header; must match the private proxy's configured value. Defaults to empty string, which passes when the private proxy is also unconfigured. |
+| `DATABASE_URL` | *(Optional)* Supabase project URL (same value as `VITE_DATABASE_URL` in browse.wf). When set, `/profile` requests require a valid Discord login JWT and are rate-limited to one upstream fetch per user per 23 hours. |
+| `DATABASE_SERVICE_ROLE_KEY` | *(Optional)* Supabase service role key (from Project Settings → API → service_role). Required when `DATABASE_URL` is set. |
+
+`DATABASE_URL` and `DATABASE_SERVICE_ROLE_KEY` must be either both set or both unset. If browse.wf has `VITE_DATABASE_URL` configured, the Worker must have `DATABASE_URL` set to the same value — otherwise every `/profile` request will be rejected with 401. When the database is unconfigured on both sides, the `/profile` endpoint is effectively disabled.
 
 Set production variables with:
 ```bash
 wrangler secret put ALLOWED_HOST
 wrangler secret put WARFRAME_API_FRONT_PROXY_TOKEN
 wrangler secret put PRIVATE_PROXY_URL
+# Optional: enable per-user rate limiting for /profile
+wrangler secret put DATABASE_URL
+wrangler secret put DATABASE_SERVICE_ROLE_KEY
 ```
 
 For local dev, copy `.dev.vars.example` to `.dev.vars` and fill in the values.

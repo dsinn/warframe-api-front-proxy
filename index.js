@@ -1,3 +1,7 @@
+import { respond, buildPreflightResponse } from "./utils.js";
+import * as worldState from "./worldState.js";
+import * as profile from "./profile.js";
+
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 let allowedOrigin = null;
@@ -8,30 +12,12 @@ function isAllowedOrigin(origin, allowedHost) {
   return allowedOrigin.test(origin);
 }
 
-const VALID_PLATFORM = /^(?:pc|ps4|xb1|swi|mob)$/;
-const VALID_PLAYER_ID = /^[0-9a-f]+$/;
-
 const ROUTES = {
-  "/worldState": (_queryParams, privateProxyUrl) =>
-    `${privateProxyUrl}?url=${encodeURIComponent("https://api.warframe.com/cdn/worldState.php")}`,
-
-  "/profile": (queryParams, privateProxyUrl) => {
-    const platform = queryParams.get("platform");
-    const playerId = queryParams.get("playerId");
-    if (!VALID_PLATFORM.test(platform) || !VALID_PLAYER_ID.test(playerId)) {
-      return null;
-    }
-    const upstreamUrl = `http://content${platform === "pc" ? "" : `-${platform}`}.warframe.com/dynamic/getProfileViewingData.php?playerId=${encodeURIComponent(playerId)}`;
-    return `${privateProxyUrl}?url=${encodeURIComponent(upstreamUrl)}`;
-  },
+  "/worldState": worldState,
+  "/profile": profile,
 };
 
 const ROUTES_PATTERN = new RegExp(`^(?:${Object.keys(ROUTES).map(escapeRegex).join("|")})$`);
-
-function respond(body, status, origin) {
-  const headers = { "Access-Control-Allow-Origin": origin ?? "*" };
-  return new Response(body, { status, headers });
-}
 
 export default {
   async fetch(request, env, _ctx) {
@@ -43,23 +29,11 @@ export default {
       }
     }
 
+    if (!!env.DATABASE_URL !== !!env.DATABASE_SERVICE_ROLE_KEY) {
+      return respond("DATABASE_URL and DATABASE_SERVICE_ROLE_KEY must both be set or both be unset", 500, origin);
+    }
+
     if (!isAllowedOrigin(origin, env.ALLOWED_HOST)) {
-      return respond("Forbidden", 403, origin);
-    }
-
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": origin,
-          "Access-Control-Allow-Methods": "GET",
-          "Access-Control-Allow-Headers": "X-Warframe-API-Front-Proxy-Token",
-          "Access-Control-Max-Age": "86400",
-        },
-      });
-    }
-
-    if (request.headers.get("X-Warframe-API-Front-Proxy-Token") !== env.WARFRAME_API_FRONT_PROXY_TOKEN) {
       return respond("Forbidden", 403, origin);
     }
 
@@ -68,26 +42,20 @@ export default {
       return respond("Not Found", 404, origin);
     }
 
-    const upstreamUrl = ROUTES[pathname](queryParams, env.PRIVATE_PROXY_URL);
+    const route = ROUTES[pathname];
+
+    if (request.method === "OPTIONS") {
+      return buildPreflightResponse(route, origin);
+    }
+
+    if (request.headers.get("X-Warframe-API-Front-Proxy-Token") !== env.WARFRAME_API_FRONT_PROXY_TOKEN) {
+      return respond("Forbidden", 403, origin);
+    }
+    const upstreamUrl = route.buildUrl(queryParams, env.PRIVATE_PROXY_URL);
     if (!upstreamUrl) {
       return respond("Unprocessable Entity", 422, origin);
     }
 
-    let response;
-    try {
-      response = await fetch(upstreamUrl, {
-        // The private proxy compares X-Private-Proxy-Secret against its configured
-        // PRIVATE_PROXY_SECRET (both default to ""), rejecting mismatches with 403.
-        headers: { "X-Private-Proxy-Secret": env.PRIVATE_PROXY_SECRET || "" },
-        cf: { cacheEverything: true, cacheTtlByStatus: { "200-299": 60, "400-599": 0 } },
-      });
-    } catch {
-      return respond("Bad Gateway", 502, origin);
-    }
-    const headers = new Headers(response.headers);
-    headers.set("Access-Control-Allow-Origin", origin);
-    headers.set("Content-Type", "application/json");
-
-    return new Response(response.body, { status: response.status, headers });
+    return route.handle(upstreamUrl, request, env, origin);
   },
 };

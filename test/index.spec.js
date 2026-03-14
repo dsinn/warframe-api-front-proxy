@@ -1,24 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { SELF, fetchMock } from "cloudflare:test";
-
-const VALID_ORIGIN = "https://allowed-host.test";
-const VALID_TOKEN = "test-token";
-const PRIVATE_PROXY_BASE = "https://private-proxy.test";
-const PRIVATE_PROXY_PATH = "/proxy.php";
-
-const MOCK_WORLD_STATE = { timestamp: 1234567890, alerts: [] };
-const MOCK_PROFILE = { accountName: "TestPlayer", guildName: "" };
-
-function makeHeaders(origin = VALID_ORIGIN, token = VALID_TOKEN) {
-  return { Origin: origin, "X-Warframe-API-Front-Proxy-Token": token };
-}
-
-function interceptPrivateProxy(upstreamUrl, status, body) {
-  fetchMock
-    .get(PRIVATE_PROXY_BASE)
-    .intercept({ path: PRIVATE_PROXY_PATH, query: { url: upstreamUrl } })
-    .reply(status, typeof body === "string" ? body : JSON.stringify(body));
-}
+import worker from "../index.js";
+import {
+  VALID_ORIGIN,
+  VALID_TOKEN,
+  PRIVATE_PROXY_BASE,
+  PRIVATE_PROXY_PATH,
+  DATABASE_BASE,
+  DATABASE_SERVICE_ROLE_KEY,
+  VALID_PLAYER_ID,
+  MOCK_WORLD_STATE,
+  makeHeaders,
+  interceptPrivateProxy,
+} from "./helpers.js";
 
 describe("warframe-api-front-proxy", () => {
   beforeEach(() => {
@@ -32,7 +26,7 @@ describe("warframe-api-front-proxy", () => {
   });
 
   describe("CORS preflight", () => {
-    it("responds 204 to OPTIONS from an allowed origin", async () => {
+    it("responds 204 to OPTIONS /worldState from an allowed origin", async () => {
       const response = await SELF.fetch("https://worker.example.com/worldState", {
         method: "OPTIONS",
         headers: {
@@ -44,7 +38,24 @@ describe("warframe-api-front-proxy", () => {
       expect(response.status).toBe(204);
       expect(response.headers.get("Access-Control-Allow-Origin")).toBe(VALID_ORIGIN);
       expect(response.headers.get("Access-Control-Allow-Methods")).toBe("GET");
-      expect(response.headers.get("Access-Control-Allow-Headers")).toBe("X-Warframe-API-Front-Proxy-Token");
+      expect(response.headers.get("Access-Control-Allow-Headers")).toContain("X-Warframe-API-Front-Proxy-Token");
+      expect(response.headers.get("Access-Control-Allow-Headers")).not.toContain("Authorization");
+      expect(response.headers.get("Access-Control-Expose-Headers")).toBeNull();
+    });
+
+    it("responds 204 to OPTIONS /profile with extra CORS headers", async () => {
+      const response = await SELF.fetch(`https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: VALID_ORIGIN,
+          "Access-Control-Request-Method": "GET",
+          "Access-Control-Request-Headers": "X-Warframe-API-Front-Proxy-Token, Authorization",
+        },
+      });
+      expect(response.status).toBe(204);
+      expect(response.headers.get("Access-Control-Allow-Headers")).toContain("X-Warframe-API-Front-Proxy-Token");
+      expect(response.headers.get("Access-Control-Allow-Headers")).toContain("Authorization");
+      expect(response.headers.get("Access-Control-Expose-Headers")).toContain("Retry-After");
     });
 
     it("rejects OPTIONS from a disallowed origin", async () => {
@@ -94,6 +105,26 @@ describe("warframe-api-front-proxy", () => {
         headers: makeHeaders("http://127.0.0.1:8080"),
       });
       expect(response.status).toBe(200);
+    });
+  });
+
+  describe("environment variable validation", () => {
+    const BASE_ENV = {
+      ALLOWED_HOST: "allowed-host.test",
+      WARFRAME_API_FRONT_PROXY_TOKEN: VALID_TOKEN,
+      PRIVATE_PROXY_URL: `${PRIVATE_PROXY_BASE}${PRIVATE_PROXY_PATH}`,
+    };
+
+    it("returns 500 when DATABASE_URL is set without DATABASE_SERVICE_ROLE_KEY", async () => {
+      const req = new Request("https://worker.example.com/worldState", { headers: makeHeaders() });
+      const response = await worker.fetch(req, { ...BASE_ENV, DATABASE_URL: DATABASE_BASE }, {});
+      expect(response.status).toBe(500);
+    });
+
+    it("returns 500 when DATABASE_SERVICE_ROLE_KEY is set without DATABASE_URL", async () => {
+      const req = new Request("https://worker.example.com/worldState", { headers: makeHeaders() });
+      const response = await worker.fetch(req, { ...BASE_ENV, DATABASE_SERVICE_ROLE_KEY }, {});
+      expect(response.status).toBe(500);
     });
   });
 
@@ -165,88 +196,6 @@ describe("warframe-api-front-proxy", () => {
 
       expect(response.status).toBe(502);
       expect(response.headers.get("Access-Control-Allow-Origin")).toBe(VALID_ORIGIN);
-    });
-  });
-
-  describe("GET /profile", () => {
-    it("forwards a valid PC profile request", async () => {
-      interceptPrivateProxy(
-        "http://content.warframe.com/dynamic/getProfileViewingData.php?playerId=abc123def456",
-        200,
-        MOCK_PROFILE,
-      );
-
-      const response = await SELF.fetch(
-        "https://worker.example.com/profile?platform=pc&playerId=abc123def456",
-        { headers: makeHeaders() },
-      );
-
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual(MOCK_PROFILE);
-    });
-
-    it("forwards a valid PS4 profile request with platform suffix", async () => {
-      interceptPrivateProxy(
-        "http://content-ps4.warframe.com/dynamic/getProfileViewingData.php?playerId=deadbeef",
-        200,
-        MOCK_PROFILE,
-      );
-
-      const response = await SELF.fetch(
-        "https://worker.example.com/profile?platform=ps4&playerId=deadbeef",
-        { headers: makeHeaders() },
-      );
-
-      expect(response.status).toBe(200);
-    });
-
-    it("returns 422 for an invalid platform", async () => {
-      const response = await SELF.fetch(
-        "https://worker.example.com/profile?platform=invalid&playerId=abc123",
-        { headers: makeHeaders() },
-      );
-      expect(response.status).toBe(422);
-    });
-
-    it("returns 422 for an invalid playerId (non-hex characters)", async () => {
-      const response = await SELF.fetch(
-        "https://worker.example.com/profile?platform=pc&playerId=not-hex!",
-        { headers: makeHeaders() },
-      );
-      expect(response.status).toBe(422);
-    });
-
-    it("returns 422 when platform is missing", async () => {
-      const response = await SELF.fetch(
-        "https://worker.example.com/profile?playerId=abc123",
-        { headers: makeHeaders() },
-      );
-      expect(response.status).toBe(422);
-    });
-
-    it("returns 422 when playerId is missing", async () => {
-      const response = await SELF.fetch(
-        "https://worker.example.com/profile?platform=pc",
-        { headers: makeHeaders() },
-      );
-      expect(response.status).toBe(422);
-    });
-
-    it("supports all valid platforms", async () => {
-      for (const platform of ["pc", "ps4", "xb1", "swi", "mob"]) {
-        const platformSuffix = platform === "pc" ? "" : `-${platform}`;
-        interceptPrivateProxy(
-          `http://content${platformSuffix}.warframe.com/dynamic/getProfileViewingData.php?playerId=abc123`,
-          200,
-          MOCK_PROFILE,
-        );
-
-        const response = await SELF.fetch(
-          `https://worker.example.com/profile?platform=${platform}&playerId=abc123`,
-          { headers: makeHeaders() },
-        );
-        expect(response.status).toBe(200);
-      }
     });
   });
 
