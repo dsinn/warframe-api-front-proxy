@@ -1,4 +1,4 @@
-import { fetchMock } from "cloudflare:test";
+import { fetchMock } from "./fetch-mock.js";
 
 export const VALID_ORIGIN = "https://allowed-host.test";
 export const VALID_TOKEN = "test-token";
