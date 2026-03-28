@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { SELF } from "cloudflare:test";
-import { fetchMock } from "./fetch-mock.js";
 import worker from "../index.js";
 import {
   VALID_ORIGIN,
@@ -12,20 +11,13 @@ import {
   VALID_PLAYER_ID,
   MOCK_WORLD_STATE,
   makeHeaders,
-  interceptPrivateProxy,
+  makeResponse,
+  mockFetch,
 } from "./helpers.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("warframe-api-front-proxy", () => {
-  beforeEach(() => {
-    fetchMock.activate();
-    fetchMock.disableNetConnect();
-  });
-
-  afterEach(() => {
-    fetchMock.assertNoPendingInterceptors();
-    fetchMock.deactivate();
-  });
-
   describe("CORS preflight", () => {
     it("responds 204 to OPTIONS /worldState from an allowed origin", async () => {
       const response = await SELF.fetch("https://worker.example.com/worldState", {
@@ -82,8 +74,7 @@ describe("warframe-api-front-proxy", () => {
     });
 
     it("allows requests from the configured host", async () => {
-      interceptPrivateProxy("https://api.warframe.com/cdn/worldState.php", 200, MOCK_WORLD_STATE);
-
+      mockFetch(makeResponse(200, MOCK_WORLD_STATE));
       const response = await SELF.fetch("https://worker.example.com/worldState", {
         headers: makeHeaders("https://allowed-host.test"),
       });
@@ -91,8 +82,7 @@ describe("warframe-api-front-proxy", () => {
     });
 
     it("allows requests from localhost with any port", async () => {
-      interceptPrivateProxy("https://api.warframe.com/cdn/worldState.php", 200, MOCK_WORLD_STATE);
-
+      mockFetch(makeResponse(200, MOCK_WORLD_STATE));
       const response = await SELF.fetch("https://worker.example.com/worldState", {
         headers: makeHeaders("http://localhost:60969"),
       });
@@ -100,8 +90,7 @@ describe("warframe-api-front-proxy", () => {
     });
 
     it("allows requests from 127.0.0.1 with any port", async () => {
-      interceptPrivateProxy("https://api.warframe.com/cdn/worldState.php", 200, MOCK_WORLD_STATE);
-
+      mockFetch(makeResponse(200, MOCK_WORLD_STATE));
       const response = await SELF.fetch("https://worker.example.com/worldState", {
         headers: makeHeaders("http://127.0.0.1:8080"),
       });
@@ -163,7 +152,7 @@ describe("warframe-api-front-proxy", () => {
 
   describe("GET /worldState", () => {
     it("forwards the request to the private proxy and returns JSON", async () => {
-      interceptPrivateProxy("https://api.warframe.com/cdn/worldState.php", 200, MOCK_WORLD_STATE);
+      mockFetch(makeResponse(200, MOCK_WORLD_STATE));
 
       const response = await SELF.fetch("https://worker.example.com/worldState", {
         headers: makeHeaders(),
@@ -176,7 +165,7 @@ describe("warframe-api-front-proxy", () => {
     });
 
     it("forwards non-200 upstream status codes", async () => {
-      interceptPrivateProxy("https://api.warframe.com/cdn/worldState.php", 502, "Bad Gateway");
+      mockFetch(makeResponse(502, "Bad Gateway"));
 
       const response = await SELF.fetch("https://worker.example.com/worldState", {
         headers: makeHeaders(),
@@ -186,10 +175,7 @@ describe("warframe-api-front-proxy", () => {
     });
 
     it("returns 502 with CORS header when private proxy is unreachable", async () => {
-      fetchMock
-        .get(PRIVATE_PROXY_BASE)
-        .intercept({ path: PRIVATE_PROXY_PATH, query: { url: "https://api.warframe.com/cdn/worldState.php" } })
-        .replyWithError("Connection refused");
+      mockFetch(new Error("Connection refused"));
 
       const response = await SELF.fetch("https://worker.example.com/worldState", {
         headers: makeHeaders(),
@@ -202,21 +188,14 @@ describe("warframe-api-front-proxy", () => {
 
   describe("private proxy authentication", () => {
     it("sends X-Private-Proxy-Secret to the private proxy", async () => {
-      // The mock only matches if X-Private-Proxy-Secret is exactly the configured secret.
-      // If the worker doesn't send the header, no interceptor matches and the test fails.
-      fetchMock
-        .get(PRIVATE_PROXY_BASE)
-        .intercept({
-          path: PRIVATE_PROXY_PATH,
-          query: { url: "https://api.warframe.com/cdn/worldState.php" },
-          headers: { "x-private-proxy-secret": "test-private-proxy-secret" },
-        })
-        .reply(200, JSON.stringify(MOCK_WORLD_STATE));
-
+      const spy = mockFetch(makeResponse(200, MOCK_WORLD_STATE));
       const response = await SELF.fetch("https://worker.example.com/worldState", {
         headers: makeHeaders(),
       });
       expect(response.status).toBe(200);
+      const [url, init] = spy.mock.calls[0];
+      expect(new URL(url).origin).toBe(PRIVATE_PROXY_BASE);
+      expect(init.headers["x-private-proxy-secret"] ?? init.headers["X-Private-Proxy-Secret"]).toBe("test-private-proxy-secret");
     });
   });
 

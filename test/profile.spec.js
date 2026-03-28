@@ -1,18 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { SELF } from "cloudflare:test";
-import { fetchMock } from "./fetch-mock.js";
 import worker from "../index.js";
 import {
   VALID_TOKEN,
   PRIVATE_PROXY_BASE,
   PRIVATE_PROXY_PATH,
-  DATABASE_BASE,
-  DATABASE_SERVICE_ROLE_KEY,
   VALID_PLAYER_ID,
   MOCK_PROFILE,
   makeHeaders,
-  interceptPrivateProxy,
+  makeResponse,
+  mockFetch,
 } from "./helpers.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const VALID_USER_ID = "00000000-0000-0000-0000-000000000001";
 const FUTURE_TIMESTAMP = new Date(Date.now() + 23 * 60 * 60 * 1000).toISOString();
@@ -21,49 +21,7 @@ function makeProfileHeaders(extraHeaders = {}) {
   return { ...makeHeaders(), Authorization: "Bearer test-jwt", ...extraHeaders };
 }
 
-function interceptAuth(status, body) {
-  fetchMock
-    .get(DATABASE_BASE)
-    .intercept({
-      path: "/auth/v1/user",
-      headers: { Authorization: "Bearer test-jwt", apikey: DATABASE_SERVICE_ROLE_KEY },
-    })
-    .reply(status, typeof body === "string" ? body : JSON.stringify(body));
-}
-
-function interceptRpcAllowed(nextFetchAvailableAt) {
-  fetchMock
-    .get(DATABASE_BASE)
-    .intercept({ path: "/rest/v1/rpc/try_profile_request", method: "POST" })
-    .reply(200, JSON.stringify({ allowed: true, next_fetch_available_at: nextFetchAvailableAt }));
-}
-
-function interceptRpcDenied(nextFetchAvailableAt) {
-  fetchMock
-    .get(DATABASE_BASE)
-    .intercept({ path: "/rest/v1/rpc/try_profile_request", method: "POST" })
-    .reply(200, JSON.stringify({ allowed: false, next_fetch_available_at: nextFetchAvailableAt }));
-}
-
-function interceptPrivateProxyForProfile() {
-  interceptPrivateProxy(
-    `http://content.warframe.com/dynamic/getProfileViewingData.php?playerId=${VALID_PLAYER_ID}`,
-    200,
-    MOCK_PROFILE,
-  );
-}
-
 describe("GET /profile", () => {
-  beforeEach(() => {
-    fetchMock.activate();
-    fetchMock.disableNetConnect();
-  });
-
-  afterEach(() => {
-    fetchMock.assertNoPendingInterceptors();
-    fetchMock.deactivate();
-  });
-
   describe("environment variable validation", () => {
     const BASE_ENV = {
       ALLOWED_HOST: "allowed-host.test",
@@ -88,7 +46,7 @@ describe("GET /profile", () => {
     });
 
     it("returns 401 when the JWT is rejected by the database auth endpoint", async () => {
-      interceptAuth(401, "Unauthorized");
+      mockFetch(makeResponse(401, "Unauthorized"));
       const response = await SELF.fetch(
         `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
         { headers: makeProfileHeaders() },
@@ -97,10 +55,7 @@ describe("GET /profile", () => {
     });
 
     it("returns 401 when the auth endpoint returns non-JSON", async () => {
-      fetchMock
-        .get(DATABASE_BASE)
-        .intercept({ path: "/auth/v1/user" })
-        .reply(200, "<html>error</html>", { headers: { "Content-Type": "text/html" } });
+      mockFetch(makeResponse(200, "<html>error</html>", { "Content-Type": "text/html" }));
       const response = await SELF.fetch(
         `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
         { headers: makeProfileHeaders() },
@@ -111,8 +66,10 @@ describe("GET /profile", () => {
 
   describe("rate limiting", () => {
     it("returns 429 with Retry-After header when rate-limited", async () => {
-      interceptAuth(200, { id: VALID_USER_ID });
-      interceptRpcDenied(FUTURE_TIMESTAMP);
+      mockFetch(
+        makeResponse(200, { id: VALID_USER_ID }),
+        makeResponse(200, { allowed: false, next_fetch_available_at: FUTURE_TIMESTAMP }),
+      );
       const response = await SELF.fetch(
         `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
         { headers: makeProfileHeaders() },
@@ -125,11 +82,10 @@ describe("GET /profile", () => {
     });
 
     it("returns 500 when the RPC endpoint returns non-JSON", async () => {
-      interceptAuth(200, { id: VALID_USER_ID });
-      fetchMock
-        .get(DATABASE_BASE)
-        .intercept({ path: "/rest/v1/rpc/try_profile_request", method: "POST" })
-        .reply(200, "<html>error</html>", { headers: { "Content-Type": "text/html" } });
+      mockFetch(
+        makeResponse(200, { id: VALID_USER_ID }),
+        makeResponse(200, "<html>error</html>", { "Content-Type": "text/html" }),
+      );
       const response = await SELF.fetch(
         `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
         { headers: makeProfileHeaders() },
@@ -138,11 +94,10 @@ describe("GET /profile", () => {
     });
 
     it("returns 500 when the RPC call fails", async () => {
-      interceptAuth(200, { id: VALID_USER_ID });
-      fetchMock
-        .get(DATABASE_BASE)
-        .intercept({ path: "/rest/v1/rpc/try_profile_request", method: "POST" })
-        .reply(500, "Internal Server Error");
+      mockFetch(
+        makeResponse(200, { id: VALID_USER_ID }),
+        makeResponse(500, "Internal Server Error"),
+      );
       const response = await SELF.fetch(
         `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
         { headers: makeProfileHeaders() },
@@ -195,9 +150,11 @@ describe("GET /profile", () => {
 
   describe("successful requests", () => {
     it("forwards a valid PC profile request and returns wrapped response", async () => {
-      interceptAuth(200, { id: VALID_USER_ID });
-      interceptRpcAllowed(FUTURE_TIMESTAMP);
-      interceptPrivateProxyForProfile();
+      mockFetch(
+        makeResponse(200, { id: VALID_USER_ID }),
+        makeResponse(200, { allowed: true, next_fetch_available_at: FUTURE_TIMESTAMP }),
+        makeResponse(200, MOCK_PROFILE),
+      );
 
       const response = await SELF.fetch(
         `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
@@ -212,12 +169,10 @@ describe("GET /profile", () => {
     });
 
     it("forwards a valid PS4 profile request with platform suffix", async () => {
-      interceptAuth(200, { id: VALID_USER_ID });
-      interceptRpcAllowed(FUTURE_TIMESTAMP);
-      interceptPrivateProxy(
-        `http://content-ps4.warframe.com/dynamic/getProfileViewingData.php?playerId=${VALID_PLAYER_ID}`,
-        200,
-        MOCK_PROFILE,
+      mockFetch(
+        makeResponse(200, { id: VALID_USER_ID }),
+        makeResponse(200, { allowed: true, next_fetch_available_at: FUTURE_TIMESTAMP }),
+        makeResponse(200, MOCK_PROFILE),
       );
 
       const response = await SELF.fetch(
@@ -229,13 +184,10 @@ describe("GET /profile", () => {
 
     it("supports all valid platforms", async () => {
       for (const platform of ["pc", "ps4", "xb1", "swi", "mob", "and"]) {
-        interceptAuth(200, { id: VALID_USER_ID });
-        interceptRpcAllowed(FUTURE_TIMESTAMP);
-        const platformSuffix = platform === "pc" ? "" : `-${platform}`;
-        interceptPrivateProxy(
-          `http://content${platformSuffix}.warframe.com/dynamic/getProfileViewingData.php?playerId=${VALID_PLAYER_ID}`,
-          200,
-          MOCK_PROFILE,
+        mockFetch(
+          makeResponse(200, { id: VALID_USER_ID }),
+          makeResponse(200, { allowed: true, next_fetch_available_at: FUTURE_TIMESTAMP }),
+          makeResponse(200, MOCK_PROFILE),
         );
 
         const response = await SELF.fetch(

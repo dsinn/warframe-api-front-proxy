@@ -1,4 +1,4 @@
-import { fetchMock } from "./fetch-mock.js";
+import { vi } from "vitest";
 
 export const VALID_ORIGIN = "https://allowed-host.test";
 export const VALID_TOKEN = "test-token";
@@ -16,9 +16,16 @@ export function makeHeaders(origin = VALID_ORIGIN, token = VALID_TOKEN) {
   return { Origin: origin, "X-Warframe-API-Front-Proxy-Token": token };
 }
 
-export function interceptPrivateProxy(upstreamUrl, status, body) {
-  fetchMock
-    .get(PRIVATE_PROXY_BASE)
-    .intercept({ path: PRIVATE_PROXY_PATH, query: { url: upstreamUrl } })
-    .reply(status, typeof body === "string" ? body : JSON.stringify(body));
+export function mockFetch(...factories) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+    const factory = factories.shift();
+    if (!factory) throw new Error("Unexpected fetch call — no mock response queued");
+    if (typeof factory !== "function") return Promise.reject(factory);
+    return Promise.resolve(factory());
+  });
+}
+
+export function makeResponse(status, body, headers = {}) {
+  const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
+  return () => new Response(bodyStr, { status, headers });
 }
