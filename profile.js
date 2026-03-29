@@ -49,6 +49,32 @@ export async function handle(upstreamUrl, request, env, origin) {
     return respond("Unauthorized", 401, origin);
   }
 
+  // Global rate limit guard
+  const globalRpcRes = await fetch(`${env.DATABASE_URL}/rest/v1/rpc/is_global_profile_rate_limited`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": env.DATABASE_SERVICE_ROLE_KEY,
+      "Authorization": `Bearer ${env.DATABASE_SERVICE_ROLE_KEY}`,
+    },
+    body: "{}",
+  });
+  if (!globalRpcRes.ok) {
+    return respond("Internal Server Error", 500, origin);
+  }
+
+  let globalRpcResult;
+  try {
+    globalRpcResult = await globalRpcRes.json();
+  } catch {
+    return respond("Internal Server Error", 500, origin);
+  }
+  if (globalRpcResult.globally_limited) {
+    const retryAfter = new Date(globalRpcResult.retry_after).toUTCString();
+    const headers = { "Access-Control-Allow-Origin": origin, "Access-Control-Expose-Headers": "Retry-After", "Retry-After": retryAfter };
+    return new Response("Too Many Requests", { status: 429, headers });
+  }
+
   // Atomic rate limit check + counter increment
   const rpcRes = await fetch(`${env.DATABASE_URL}/rest/v1/rpc/try_profile_request`, {
     method: "POST",

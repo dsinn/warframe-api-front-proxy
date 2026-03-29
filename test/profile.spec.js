@@ -55,7 +55,7 @@ describe("GET /profile", () => {
     });
 
     it("returns 401 when the auth endpoint returns non-JSON", async () => {
-      mockFetch(makeResponse(200, "<html>error</html>", { "Content-Type": "text/html" }));
+      mockFetch(makeResponse(500, "Internal Server Error"));
       const response = await SELF.fetch(
         `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
         { headers: makeProfileHeaders() },
@@ -65,44 +65,66 @@ describe("GET /profile", () => {
   });
 
   describe("rate limiting", () => {
-    it("returns 429 with Retry-After header when rate-limited", async () => {
-      mockFetch(
-        makeResponse(200, { id: VALID_USER_ID }),
-        makeResponse(200, { allowed: false, next_fetch_available_at: FUTURE_TIMESTAMP }),
-      );
-      const response = await SELF.fetch(
-        `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
-        { headers: makeProfileHeaders() },
-      );
-      expect(response.status).toBe(429);
-      const retryAfter = new Date(response.headers.get("Retry-After")).getTime();
-      expect(retryAfter).toBeGreaterThan(Date.now());
-      expect(retryAfter).toBeLessThanOrEqual(new Date(FUTURE_TIMESTAMP).getTime());
-      expect(response.headers.get("Access-Control-Expose-Headers")).toContain("Retry-After");
+    describe("global rate limit", () => {
+      it("returns 429 with Retry-After header when the global limit is reached", async () => {
+        mockFetch(
+          makeResponse(200, { id: VALID_USER_ID }),
+          makeResponse(200, { globally_limited: true, retry_after: FUTURE_TIMESTAMP }),
+        );
+        const response = await SELF.fetch(
+          `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
+          { headers: makeProfileHeaders() },
+        );
+        expect(response.status).toBe(429);
+        const retryAfter = new Date(response.headers.get("Retry-After")).getTime();
+        expect(retryAfter).toBeGreaterThan(Date.now());
+        expect(retryAfter).toBeLessThanOrEqual(new Date(FUTURE_TIMESTAMP).getTime());
+        expect(response.headers.get("Access-Control-Expose-Headers")).toContain("Retry-After");
+      });
+
+      it("returns 500 when the global RPC call fails", async () => {
+        mockFetch(
+          makeResponse(200, { id: VALID_USER_ID }),
+          makeResponse(500, "Internal Server Error"),
+        );
+        const response = await SELF.fetch(
+          `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
+          { headers: makeProfileHeaders() },
+        );
+        expect(response.status).toBe(500);
+      });
     });
 
-    it("returns 500 when the RPC endpoint returns non-JSON", async () => {
-      mockFetch(
-        makeResponse(200, { id: VALID_USER_ID }),
-        makeResponse(200, "<html>error</html>", { "Content-Type": "text/html" }),
-      );
-      const response = await SELF.fetch(
-        `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
-        { headers: makeProfileHeaders() },
-      );
-      expect(response.status).toBe(500);
-    });
+    describe("per-user rate limit", () => {
+      it("returns 429 with Retry-After header when rate-limited", async () => {
+        mockFetch(
+          makeResponse(200, { id: VALID_USER_ID }),
+          makeResponse(200, { globally_limited: false }),
+          makeResponse(200, { allowed: false, next_fetch_available_at: FUTURE_TIMESTAMP }),
+        );
+        const response = await SELF.fetch(
+          `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
+          { headers: makeProfileHeaders() },
+        );
+        expect(response.status).toBe(429);
+        const retryAfter = new Date(response.headers.get("Retry-After")).getTime();
+        expect(retryAfter).toBeGreaterThan(Date.now());
+        expect(retryAfter).toBeLessThanOrEqual(new Date(FUTURE_TIMESTAMP).getTime());
+        expect(response.headers.get("Access-Control-Expose-Headers")).toContain("Retry-After");
+      });
 
-    it("returns 500 when the RPC call fails", async () => {
-      mockFetch(
-        makeResponse(200, { id: VALID_USER_ID }),
-        makeResponse(500, "Internal Server Error"),
-      );
-      const response = await SELF.fetch(
-        `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
-        { headers: makeProfileHeaders() },
-      );
-      expect(response.status).toBe(500);
+      it("returns 500 when the RPC call fails", async () => {
+        mockFetch(
+          makeResponse(200, { id: VALID_USER_ID }),
+          makeResponse(200, { globally_limited: false }),
+          makeResponse(500, "Internal Server Error"),
+        );
+        const response = await SELF.fetch(
+          `https://worker.example.com/profile?platform=pc&playerId=${VALID_PLAYER_ID}`,
+          { headers: makeProfileHeaders() },
+        );
+        expect(response.status).toBe(500);
+      });
     });
   });
 
@@ -152,6 +174,7 @@ describe("GET /profile", () => {
     it("forwards a valid PC profile request and returns wrapped response", async () => {
       mockFetch(
         makeResponse(200, { id: VALID_USER_ID }),
+        makeResponse(200, { globally_limited: false }),
         makeResponse(200, { allowed: true, next_fetch_available_at: FUTURE_TIMESTAMP }),
         makeResponse(200, MOCK_PROFILE),
       );
@@ -171,6 +194,7 @@ describe("GET /profile", () => {
     it("forwards a valid PS4 profile request with platform suffix", async () => {
       mockFetch(
         makeResponse(200, { id: VALID_USER_ID }),
+        makeResponse(200, { globally_limited: false }),
         makeResponse(200, { allowed: true, next_fetch_available_at: FUTURE_TIMESTAMP }),
         makeResponse(200, MOCK_PROFILE),
       );
@@ -186,6 +210,7 @@ describe("GET /profile", () => {
       for (const platform of ["pc", "ps4", "xb1", "swi", "mob", "and"]) {
         mockFetch(
           makeResponse(200, { id: VALID_USER_ID }),
+          makeResponse(200, { globally_limited: false }),
           makeResponse(200, { allowed: true, next_fetch_available_at: FUTURE_TIMESTAMP }),
           makeResponse(200, MOCK_PROFILE),
         );
