@@ -42,10 +42,13 @@ flowchart TD
     F -->|No| E
     F -->|Yes| G{Supabase<br/>JWT valid?}
     G -->|No / error| H[401 / 500]
-    G -->|Yes| J{try_profile_request<br/>RPC}
-    J -->|allowed: false| K["429 Too Many Requests<br/>Retry-After: &lt;HTTP date&gt;"]
+    G -->|Yes| J{is_global_profile_rate_limited<br/>RPC}
+    J -->|globally_limited: true| K["429 Too Many Requests<br/>Retry-After: &lt;HTTP date&gt;"]
     J -->|RPC error| L[500 Internal Server Error]
-    J -->|allowed: true| I[Fetch from<br/>private proxy]
+    J -->|globally_limited: false| N{try_profile_request<br/>RPC}
+    N -->|allowed: false| K
+    N -->|RPC error| L
+    N -->|allowed: true| I[Fetch from<br/>private proxy]
     I -->|Network error| M[502 Bad Gateway]
     I -->|Response| P["upstream status<br/>{ nextFetchAvailableAt, profile: &lt;body&gt; }"]
 ```
@@ -58,7 +61,7 @@ flowchart TD
 | `WARFRAME_API_FRONT_PROXY_TOKEN` | Shared secret token; must match the value sent by browse.wf clients via `X-Warframe-API-Front-Proxy-Token` header |
 | `PRIVATE_PROXY_URL` | Full URL to the private proxy script (e.g. `https://example.com/proxy.php`) |
 | `PRIVATE_PROXY_SECRET` | *(Optional)* Shared secret sent to the private proxy via `X-Private-Proxy-Secret` header; must match the private proxy's configured value. Defaults to empty string, which passes when the private proxy is also unconfigured. |
-| `DATABASE_URL` | *(Optional)* Supabase project URL (same value as `VITE_DATABASE_URL` in browse.wf). When set, `/profile` requests require a valid Discord login JWT and are rate-limited to one upstream fetch per user per 23 hours. |
+| `DATABASE_URL` | *(Optional)* Supabase project URL (same value as `VITE_DATABASE_URL` in browse.wf). When set, `/profile` requests require a valid Discord login JWT and are subject to a global limit of 10 requests per hour and a per-user limit of one request per 23 hours. |
 | `DATABASE_SERVICE_ROLE_KEY` | *(Optional)* Supabase service role key (from Project Settings → API → service_role). Required when `DATABASE_URL` is set. |
 
 `DATABASE_URL` and `DATABASE_SERVICE_ROLE_KEY` must be either both set or both unset. If browse.wf has `VITE_DATABASE_URL` configured, the Worker must have `DATABASE_URL` set to the same value — otherwise every `/profile` request will be rejected with 401. When the database is unconfigured on both sides, the `/profile` endpoint is effectively disabled.
@@ -68,7 +71,7 @@ Set production variables with:
 wrangler secret put ALLOWED_HOST
 wrangler secret put WARFRAME_API_FRONT_PROXY_TOKEN
 wrangler secret put PRIVATE_PROXY_URL
-# Optional: enable per-user rate limiting for /profile
+# Optional: enable rate limiting for /profile
 wrangler secret put DATABASE_URL
 wrangler secret put DATABASE_SERVICE_ROLE_KEY
 ```
