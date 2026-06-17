@@ -12,7 +12,7 @@ export function buildUrl(queryParams, privateProxyUrl) {
   if (!VALID_PLATFORM.test(platform) || !VALID_PLAYER_ID_REGEX.test(playerId)) {
     return null;
   }
-  const upstreamUrl = `http://content${platform === "pc" ? "" : `-${platform}`}.warframe.com/dynamic/getProfileViewingData.php?playerId=${encodeURIComponent(playerId)}`;
+  const upstreamUrl = `http://api${platform === "pc" ? "" : `-${platform}`}.warframe.com/cdn/getProfileViewingData.php?playerId=${encodeURIComponent(playerId)}`;
   return `${privateProxyUrl}?url=${encodeURIComponent(upstreamUrl)}`;
 }
 

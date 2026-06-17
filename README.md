@@ -28,7 +28,7 @@ An example implementation is available at [warframe-api-private-proxy-php](https
 | Path | Query params | Upstream |
 |---|---|---|
 | `/worldState` | — | `https://api.warframe.com/cdn/worldState.php` |
-| `/profile` | `platform`, `playerId` | `http://content[-platform].warframe.com/dynamic/getProfileViewingData.php` |
+| `/profile` | `platform`, `playerId` | `http://api[-platform].warframe.com/cdn/getProfileViewingData.php` |
 
 ### `/profile` request flow
 
