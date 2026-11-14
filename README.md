@@ -34,23 +34,35 @@ An example implementation is available at [warframe-api-private-proxy-php](https
 
 ```mermaid
 flowchart TD
+    %% Hack: Blank "spacer" nodes (s1...) sit left of each happy-path node so that it is the median child of its parent,
+    %% which keeps the happy path in a straight-ish vertical line with the error nodes to its right.
     A[GET /profile] --> B{Origin allowed?<br/>Token valid?<br/>Params valid?}
-    B -->|No| C[403 / 422]
+    B ~~~ s1[" "]:::spacer
     B -->|Yes| D{DATABASE_URL<br/>configured?}
-    D -->|No| E[401 Unauthorized]
+    B -->|No| C[403 / 422]
+    D ~~~ s2[" "]:::spacer
     D -->|Yes| F{Authorization:<br/>Bearer present?}
-    F -->|No| E
+    D -->|No| E1[401 Unauthorized]
+    F ~~~ s3[" "]:::spacer
     F -->|Yes| G{Supabase<br/>JWT valid?}
-    G -->|No / error| H[401 / 500]
+    F -->|No| E2[401 Unauthorized]
+    G ~~~ s4[" "]:::spacer
     G -->|Yes| J{is_global_profile_rate_limited<br/>RPC}
-    J -->|globally_limited: true| K["429 Too Many Requests<br/>Retry-After: &lt;HTTP date&gt;"]
-    J -->|RPC error| L[500 Internal Server Error]
+    G -->|No / error| H[401 / 500]
+    J ~~~ s5[" "]:::spacer
+    J ~~~ s6[" "]:::spacer
     J -->|globally_limited: false| N{try_profile_request<br/>RPC}
-    N -->|allowed: false| K
-    N -->|RPC error| L
+    J -->|globally_limited: true| K1["429 Too Many Requests<br/>Retry-After: &lt;HTTP date&gt;"]
+    J -->|RPC error| L1[500 Internal Server Error]
+    N ~~~ s7[" "]:::spacer
+    N ~~~ s8[" "]:::spacer
     N -->|allowed: true| I[Fetch from<br/>private proxy]
-    I -->|Network error| M[502 Bad Gateway]
+    N -->|allowed: false| K2["429 Too Many Requests<br/>Retry-After: &lt;HTTP date&gt;"]
+    N -->|RPC error| L2[500 Internal Server Error]
+    I ~~~ s9[" "]:::spacer
     I -->|Response| P["upstream status<br/>{ nextFetchAvailableAt, profile: &lt;body&gt; }"]
+    I -->|Network error| M[502 Bad Gateway]
+    classDef spacer fill:none,stroke:none,color:transparent
 ```
 
 ## Environment Variables
